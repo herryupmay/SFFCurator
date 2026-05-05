@@ -93,9 +93,6 @@ A weekly forum cadence is firmly in "less than a coffee" territory.
 
 ### Which provider should I pick?
 
-**For best zh-TW quality out of the box:** Anthropic Claude. Cleanest
-台灣用語, fewest yellow flags. The tool is tuned to it.
-
 **For free testing:** Google Gemini's API free tier, or a local Gemma model
 via llama-cpp-python.
 
@@ -131,9 +128,6 @@ in the background — it'll exit when you close the terminal or restart your PC.
   whatever it is, or restart your PC, then try again.
 - **A source returns no results?** See the FAQ above. The other sources
   will still work.
-- **zh-TW writeup uses 大陸用語?** This sometimes happens with non-Claude
-  models. The app flags suspicious phrases in yellow — fix by hand. If
-  it's bad enough, switch back to Claude in Settings.
 - **Anything else?** Tell the dev. Include the theme you searched, which
   provider/model you're on, and what you saw in the terminal window.
 
