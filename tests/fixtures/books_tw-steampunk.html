@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head><meta charset="utf-8"><title>Books.com.tw — steampunk (test fixture)</title></head>
+<body>
+<!--
+  Fixture for the Books.com.tw search-results page.
+
+  Reflects the legacy ul.searchbook layout the scraper currently targets.
+  When the real site moves to a new layout and the scraper breaks, save
+  the live HTML over this file and update the selectors in
+  src/sources/books_tw.ts; tests will tell you when you've matched them.
+-->
+<div class="search-result">
+  <ul class="searchbook">
+    <li class="item">
+      <h3><a href="//www.books.com.tw/products/0010912345" class="share">差分機</a></h3>
+      <p class="searchbook-author">
+        <a href="/authors/123">威廉·吉布森</a>、<a href="/authors/124">布魯斯·斯特林</a>
+      </p>
+      <p class="info">出版社:某某出版社 / 出版日:2018-04-15 / 語言:繁體中文</p>
+    </li>
+    <li class="item">
+      <h3><a href="//www.books.com.tw/products/0010998877" class="share">神經喚術士</a></h3>
+      <p class="searchbook-author">
+        <a href="/authors/123">威廉·吉布森</a>
+      </p>
+      <p class="info">出版社:某某出版社 / 出版日:2012-08-01</p>
+    </li>
+    <li class="item">
+      <!-- Edge case: title link present but no author block. Should still parse. -->
+      <h3><a href="//www.books.com.tw/products/0010777666" class="share">蒸汽朋克年代記</a></h3>
+      <p class="info">出版日:2020-01-30</p>
+    </li>
+    <li class="item">
+      <!-- Edge case: missing href → must be skipped. -->
+      <h3><a class="share">沒有連結的書</a></h3>
+    </li>
+  </ul>
+</div>
+</body>
+</html>

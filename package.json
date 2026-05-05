@@ -1,0 +1,21 @@
+{
+  "name": "sff-curator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Forum SFF curation pipeline — multi-source discovery + zh-TW writeup",
+  "scripts": {
+    "dev": "bun --hot src/server.ts",
+    "start": "bun src/server.ts",
+    "build:win": "bun build src/server.ts --compile --target=bun-windows-x64 --outfile=dist/sff-curator.exe",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/bun": "latest"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0"
+  }
+}

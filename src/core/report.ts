@@ -1,0 +1,120 @@
+/**
+ * Markdown report writer.
+ *
+ * Composes the final per-work markdown sections. Used both by the UI
+ * (assembles the full report client-side) and could be reused server-side
+ * if we ever want to write directly to disk.
+ *
+ * Output format (one section per work):
+ *
+ *   ## 差分機 (The Difference Engine)
+ *   - **作者**: William Gibson / 威廉·吉布森
+ *   - **類型**: 書籍 · steampunk
+ *   - **出版年**: 1990
+ *   - **譯本狀況**: 已中譯
+ *   - **信心評級**: ★★★ (high — 4 sources)
+ *
+ *   ### 草稿介紹
+ *   ...200-word zh-TW...
+ *
+ *   ### 來源
+ *   - [isfdb](https://...)
+ *   - [openlibrary](https://...)
+ *   - [books_tw](https://...)
+ */
+
+import type { Work } from '../types';
+
+const STARS: Record<string, string> = { high: '★★★', medium: '★★', low: '★' };
+
+const MEDIUM_LABEL: Record<string, string> = {
+  book:  '書籍',
+  film:  '電影',
+  tv:    '影集',
+  anime: '動畫',
+  manga: '漫畫',
+  comic: '漫畫',
+  game:  '遊戲',
+};
+
+export function reportSection(work: Work, writeupText?: string): string {
+  const titleZh = work.titles.zh || '';
+  const titleEn = work.titles.en || '';
+  const titleOg = work.titles.original || '';
+
+  const heading =
+    titleZh && titleEn ? `${titleZh} (${titleEn})` :
+    titleZh || titleEn || titleOg || '(untitled)';
+
+  const creators = (work.creators || [])
+    .map(c => {
+      const en = c.name.en;
+      const zh = c.name.zh;
+      const og = c.name.original;
+      if (zh && en) return `${en} / ${zh}`;
+      return zh || en || og || '';
+    })
+    .filter(Boolean)
+    .join('、');
+
+  const medium = MEDIUM_LABEL[work.medium] || work.medium;
+  const subgenres = (work.subgenres || []).join(', ');
+  const mediumLine = subgenres ? `${medium} · ${subgenres}` : medium;
+
+  const yearLine = work.year ? `${work.year}` : '?';
+  const translation =
+    work.hasZhTranslation === true  ? '已中譯' :
+    work.hasZhTranslation === false ? '未中譯' :
+                                       '不確定';
+  const inTw = work.availableInTw ? '在台灣可購得' : '台灣未上架';
+
+  const stars = STARS[work.confidence ?? 'low'] || '★';
+  const sourceCount = Object.keys(work.sources).length;
+  const confLine = `${stars} (${work.confidence ?? 'low'} — ${sourceCount} source${sourceCount === 1 ? '' : 's'})`;
+
+  // Strip the `_N` collision suffix that collapseSeries adds when multiple
+  // volumes share the same source (e.g. books_tw, books_tw_2, books_tw_3).
+  // Display label stays clean ("books_tw"); URL remains volume-specific.
+  const sourceList = Object.entries(work.sources)
+    .map(([name, url]) => `- [${name.replace(/_\d+$/, '')}](${url})`)
+    .join('\n');
+
+  const flags = (work.flags || []).length ? `\n- **備註**: ${work.flags!.join(' / ')}` : '';
+
+  const writeupBlock = writeupText
+    ? `\n### 草稿介紹\n\n${writeupText.trim()}\n`
+    : `\n### 草稿介紹\n\n_（尚未生成 / not yet generated）_\n`;
+
+  return [
+    `## ${heading}`,
+    '',
+    creators ? `- **作者**: ${creators}` : '',
+    `- **類型**: ${mediumLine}`,
+    `- **出版年**: ${yearLine}`,
+    `- **譯本狀況**: ${translation}`,
+    `- **台灣供應**: ${inTw}`,
+    `- **信心評級**: ${confLine}${flags}`,
+    writeupBlock,
+    `### 來源`,
+    '',
+    sourceList,
+    '',
+  ].filter(line => line !== '').join('\n');
+}
+
+export function reportHeader(theme: string, date: Date = new Date()): string {
+  const iso = date.toISOString().slice(0, 10);
+  return [
+    `# 策展主題:${theme}`,
+    '',
+    `_生成日期: ${iso}_  `,
+    `_工具: SFF Curator_`,
+    '',
+    '---',
+    '',
+  ].join('\n');
+}
+
+export function buildReport(theme: string, sections: string[]): string {
+  return reportHeader(theme) + sections.join('\n---\n\n');
+}

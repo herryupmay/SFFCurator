@@ -1,0 +1,389 @@
+/**
+ * Tests for the multi-keyword + bilingual-expansion logic in
+ * src/server.ts. Covers:
+ *   - parseKeywords: splits on commas (ASCII + CJK), trims, filters empties
+ *   - matchesAllGroups: AND across groups, OR within a group, case-insensitive
+ *   - translateKeywords: parses LLM line-format reply, falls back gracefully
+ *
+ * The LLM call is replaced via a global fetch monkey-patch so we don't
+ * have to start a real model server.
+ */
+
+import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { parseKeywords, matchesAllGroups, translateKeywords, groupAsMediumFilter, groupAsGenreFilter } from '../src/server';
+import type { Work } from '../src/types';
+import type { LLMConfig } from '../src/llm/client';
+
+function w(partial: Partial<Work> & { sources: Work['sources'] }): Work {
+  return { titles: {}, creators: [], medium: 'book', raw: {}, ...partial };
+}
+
+describe('parseKeywords', () => {
+  test('single keyword -> single-element list', () => {
+    expect(parseKeywords('學徒')).toEqual(['學徒']);
+    expect(parseKeywords('steampunk')).toEqual(['steampunk']);
+  });
+  test('comma-separated keywords (ASCII)', () => {
+    expect(parseKeywords('學徒,科幻,漫畫')).toEqual(['學徒', '科幻', '漫畫']);
+  });
+  test('full-width comma + ideographic comma', () => {
+    expect(parseKeywords('學徒，科幻、漫畫')).toEqual(['學徒', '科幻', '漫畫']);
+  });
+  test('semicolons also split', () => {
+    expect(parseKeywords('a;b；c')).toEqual(['a', 'b', 'c']);
+  });
+  test('preserves whitespace inside a keyword (e.g. "science fiction")', () => {
+    expect(parseKeywords('science fiction, manga')).toEqual(['science fiction', 'manga']);
+  });
+  test('trims and drops empties', () => {
+    expect(parseKeywords('  學徒  ,  , 漫畫 ')).toEqual(['學徒', '漫畫']);
+  });
+  test('empty input -> empty list', () => {
+    expect(parseKeywords('')).toEqual([]);
+    expect(parseKeywords(',,,')).toEqual([]);
+  });
+});
+
+describe('matchesAllGroups', () => {
+  const work = w({
+    sources: { books_tw: 'a' },
+    titles: { en: 'Assassin\'s Apprentice', zh: '刺客學徒' },
+    creators: [{ name: { en: 'Robin Hobb', zh: '羅蘋·荷布' }, role: 'author' }],
+    synopsis: { zh: '一個刺客的學徒小說' },
+    subgenres: ['fantasy'],
+  });
+
+  test('zero groups -> always true', () => {
+    expect(matchesAllGroups(work, [])).toBe(true);
+  });
+  test('single group with single matching term -> true', () => {
+    expect(matchesAllGroups(work, [['學徒']])).toBe(true);
+  });
+  test('single group, no matching term -> false', () => {
+    expect(matchesAllGroups(work, [['cyberpunk']])).toBe(false);
+  });
+  test('AND across groups: every group must match', () => {
+    expect(matchesAllGroups(work, [['學徒'], ['fantasy']])).toBe(true);
+    expect(matchesAllGroups(work, [['學徒'], ['cyberpunk']])).toBe(false);
+  });
+  test('OR within a group: any term in group counts', () => {
+    expect(matchesAllGroups(work, [['cyberpunk', '學徒']])).toBe(true);
+  });
+  test('case-insensitive match on English', () => {
+    expect(matchesAllGroups(work, [['ROBIN HOBB']])).toBe(true);
+    expect(matchesAllGroups(work, [['hobb', 'fantasy']])).toBe(true);
+  });
+  test('matches across the AUTHOR field too (not just titles)', () => {
+    expect(matchesAllGroups(work, [['羅蘋']])).toBe(true);
+  });
+  test('matches subgenres', () => {
+    expect(matchesAllGroups(work, [['fantasy']])).toBe(true);
+  });
+  test('matches synopsis', () => {
+    expect(matchesAllGroups(work, [['小說']])).toBe(true);
+  });
+});
+
+describe('groupAsMediumFilter (medium-keyword recognition)', () => {
+  test('recognizes single zh medium keyword 漫畫 -> manga + comic', () => {
+    expect(groupAsMediumFilter(['漫畫'])).toEqual(['manga', 'comic']);
+  });
+  test('recognizes English manga / comic / movie', () => {
+    expect(groupAsMediumFilter(['manga'])).toEqual(['manga']);
+    expect(groupAsMediumFilter(['comic'])).toEqual(['comic']);
+    expect(groupAsMediumFilter(['movie'])).toEqual(['film']);
+  });
+  test('LLM-expanded group [漫畫, manga, comic] still resolves to one medium set', () => {
+    const out = groupAsMediumFilter(['漫畫', 'manga', 'comic']);
+    expect(out).not.toBeNull();
+    expect(new Set(out!)).toEqual(new Set(['manga', 'comic']));
+  });
+  test('mixed group with a non-medium term returns null (treat as text group)', () => {
+    expect(groupAsMediumFilter(['漫畫', 'cyberpunk'])).toBeNull();
+    expect(groupAsMediumFilter(['學徒', 'apprentice'])).toBeNull();
+  });
+  test('empty group returns null', () => {
+    expect(groupAsMediumFilter([])).toBeNull();
+  });
+  test('case-insensitive', () => {
+    expect(groupAsMediumFilter(['MANGA'])).toEqual(['manga']);
+    expect(groupAsMediumFilter(['Tv'])).toEqual(['tv']);
+  });
+});
+
+describe('matchesAllGroups + medium routing', () => {
+  const mangaWork = w({
+    sources: { anilist: 'a' },
+    titles: { en: "Assassin's Apprentice", original: '刺客學徒' },
+    creators: [{ name: { en: 'Robin Hobb' }, role: 'author' }],
+    medium: 'manga',
+    synopsis: { en: 'A coming-of-age story about a young assassin in training.' },
+  });
+  const novelWork = w({
+    sources: { books_tw: 'a' },
+    titles: { zh: '刺客學徒' },
+    creators: [{ name: { zh: '羅蘋·荷布' }, role: 'author' }],
+    medium: 'book',
+  });
+
+  test('keyword 漫畫 keeps manga, drops novel (medium constraint, not text-match)', () => {
+    const groups = [['學徒', 'apprentice'], ['漫畫', 'manga', 'comic']];
+    expect(matchesAllGroups(mangaWork, groups)).toBe(true);
+    expect(matchesAllGroups(novelWork, groups)).toBe(false);
+  });
+  test('manga is kept even though the word "漫畫" is not in any text field', () => {
+    // mangaWork's text contains "Apprentice" / "學徒" but does not contain
+    // the literal "漫畫" anywhere; the old text-match would drop it.
+    expect(matchesAllGroups(mangaWork, [['漫畫']])).toBe(true);
+  });
+  test('keyword 小說 keeps novel, drops manga', () => {
+    expect(matchesAllGroups(novelWork, [['小說']])).toBe(true);
+    expect(matchesAllGroups(mangaWork, [['小說']])).toBe(false);
+  });
+});
+
+describe('groupAsGenreFilter (genre-keyword recognition)', () => {
+  test('recognizes single zh genre keyword 科幻 -> science fiction + sci-fi', () => {
+    const out = groupAsGenreFilter(['科幻']);
+    expect(out).not.toBeNull();
+    expect(new Set(out)).toEqual(new Set(['science fiction', 'sci-fi']));
+  });
+  test('recognizes 蒸汽龐克 / 奇幻 / 賽博龐克', () => {
+    expect(groupAsGenreFilter(['蒸汽龐克'])).toEqual(['steampunk']);
+    expect(groupAsGenreFilter(['奇幻'])).toEqual(['fantasy']);
+    expect(groupAsGenreFilter(['賽博龐克'])).toEqual(['cyberpunk']);
+  });
+  test('LLM-expanded group [科幻, science fiction, sci-fi] resolves cleanly', () => {
+    const out = groupAsGenreFilter(['科幻', 'science fiction', 'sci-fi']);
+    expect(out).not.toBeNull();
+    expect(new Set(out)).toEqual(new Set(['science fiction', 'sci-fi']));
+  });
+  test('mixed group with non-genre term returns null (text group)', () => {
+    expect(groupAsGenreFilter(['科幻', '學徒'])).toBeNull();
+    expect(groupAsGenreFilter(['學徒', 'apprentice'])).toBeNull();
+  });
+  test('case-insensitive', () => {
+    expect(groupAsGenreFilter(['STEAMPUNK'])).toEqual(['steampunk']);
+    expect(groupAsGenreFilter(['Cyberpunk'])).toEqual(['cyberpunk']);
+  });
+});
+
+describe('matchesAllGroups + genre routing', () => {
+  // A sci-fi novel with the subgenre tagged AND no genre keyword in text.
+  const taggedSciFi = w({
+    sources: { isfdb: 'a' },
+    titles: { en: 'Neuromancer' },
+    creators: [{ name: { en: 'William Gibson' }, role: 'author' }],
+    medium: 'book',
+    subgenres: ['science fiction', 'cyberpunk'],
+  });
+  // A sci-fi novel where subgenres aren't populated (books_tw / readmoo
+  // shape) but the synopsis text mentions science fiction.
+  const untagedSciFi = w({
+    sources: { books_tw: 'a' },
+    titles: { zh: '某科幻小說' },
+    medium: 'book',
+    synopsis: { zh: '一本充滿科幻設定的小說。' },
+  });
+  // A fantasy novel that should NOT match science fiction filter.
+  const fantasyOnly = w({
+    sources: { isfdb: 'a' },
+    titles: { en: 'The Way of Kings' },
+    medium: 'book',
+    subgenres: ['fantasy', 'epic fantasy'],
+  });
+
+  test('科幻 filter keeps tagged sci-fi (subgenre match path)', () => {
+    expect(matchesAllGroups(taggedSciFi, [['科幻']])).toBe(true);
+  });
+  test('科幻 filter also keeps untagged work whose text contains 科幻 (text fallback)', () => {
+    expect(matchesAllGroups(untagedSciFi, [['科幻']])).toBe(true);
+  });
+  test('科幻 filter drops fantasy-only work', () => {
+    expect(matchesAllGroups(fantasyOnly, [['科幻']])).toBe(false);
+  });
+  test('AND with text group + genre group still works', () => {
+    // Theme = neuromancer, genre = science fiction
+    expect(matchesAllGroups(taggedSciFi, [['Neuromancer'], ['科幻']])).toBe(true);
+    expect(matchesAllGroups(fantasyOnly, [['Way of Kings'], ['科幻']])).toBe(false);
+  });
+  test('LLM-expanded genre group [科幻, science fiction, sci-fi] matches via either subgenre or text', () => {
+    expect(matchesAllGroups(taggedSciFi, [['科幻', 'science fiction', 'sci-fi']])).toBe(true);
+    // A work whose subgenre is 'sci-fi' (not 'science fiction') should also match.
+    const altTagged = w({
+      sources: { isfdb: 'a' }, titles: { en: 'X' }, medium: 'book',
+      subgenres: ['sci-fi'],
+    });
+    expect(matchesAllGroups(altTagged, [['科幻', 'science fiction', 'sci-fi']])).toBe(true);
+  });
+});
+
+describe('translateKeywords', () => {
+  let originalFetch: typeof fetch;
+  let nextResponseText: string;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    nextResponseText = '';
+    globalThis.fetch = (async () => {
+      // Mimic an Anthropic /v1/messages response shape.
+      return new Response(
+        JSON.stringify({ content: [{ type: 'text', text: nextResponseText }] }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const cfg: LLMConfig = { provider: 'anthropic', apiKey: 'sk-test' };
+
+  test('parses well-formed LLM reply into [original, eq1, eq2] groups', async () => {
+    nextResponseText = '學徒=apprentice,disciple,mentee\n科幻=science fiction,sci-fi\n漫畫=manga,comic';
+    const groups = await translateKeywords(['學徒', '科幻', '漫畫'], cfg);
+    expect(groups).toEqual([
+      ['學徒', 'apprentice', 'disciple', 'mentee'],
+      ['科幻', 'science fiction', 'sci-fi'],
+      ['漫畫', 'manga', 'comic'],
+    ]);
+  });
+
+  test('drops English equivalent equal to the original (case-insensitive)', async () => {
+    nextResponseText = 'apprentice=apprentice';
+    const groups = await translateKeywords(['apprentice'], cfg);
+    // Only the original retained; LLM duplicate stripped.
+    expect(groups).toEqual([['apprentice']]);
+  });
+
+  test('handles missing lines: keywords without LLM output get singleton', async () => {
+    nextResponseText = '學徒=apprentice';
+    const groups = await translateKeywords(['學徒', '科幻'], cfg);
+    expect(groups[0]).toEqual(['學徒', 'apprentice']);
+    expect(groups[1]).toEqual(['科幻']); // no expansion produced
+  });
+
+  test('handles malformed lines without throwing', async () => {
+    nextResponseText = 'this is not the right format\n學徒=apprentice\n   \n;;';
+    const groups = await translateKeywords(['學徒'], cfg);
+    expect(groups).toEqual([['學徒', 'apprentice']]);
+  });
+
+  test('handles full-width comma in LLM output', async () => {
+    nextResponseText = '學徒=apprentice,disciple';
+    const groups = await translateKeywords(['學徒'], cfg);
+    expect(groups[0]).toContain('apprentice');
+    expect(groups[0]).toContain('disciple');
+  });
+
+  test('parses LLM reply with Japanese (kana/kanji) and Korean (hangul) variants', async () => {
+    nextResponseText = '學徒=apprentice,見習い,弟子,수련생,견습';
+    const groups = await translateKeywords(['學徒'], cfg);
+    expect(groups[0]).toContain('apprentice');
+    expect(groups[0]).toContain('見習い');
+    expect(groups[0]).toContain('弟子');
+    expect(groups[0]).toContain('수련생');
+    expect(groups[0]).toContain('견습');
+  });
+});
+
+describe('translateKeywords prompt — multilingual hint', () => {
+  let originalFetch: typeof fetch;
+  let lastBody: any;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    lastBody = null;
+    globalThis.fetch = (async (_url: any, init: any) => {
+      lastBody = JSON.parse(init.body);
+      return new Response(
+        JSON.stringify({ content: [{ type: 'text', text: '' }] }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const cfg2: LLMConfig = { provider: 'anthropic', apiKey: 'sk-test' };
+
+  test('CJK input -> prompt mentions Japanese AND Korean explicitly', async () => {
+    await translateKeywords(['學徒', '科幻'], cfg2);
+    const userMsg: string = lastBody.messages[0].content;
+    expect(userMsg).toContain('Japanese');
+    expect(userMsg).toContain('Korean');
+    expect(userMsg).toContain('見習い');
+    expect(userMsg).toContain('수련생');
+  });
+
+  test('CJK input -> AniList rationale appears in the prompt', async () => {
+    await translateKeywords(['學徒'], cfg2);
+    const userMsg: string = lastBody.messages[0].content;
+    expect(userMsg.toLowerCase()).toContain('anilist');
+  });
+
+  test('pure-ASCII input -> prompt does NOT mention Japanese/Korean (token saving)', async () => {
+    await translateKeywords(['steampunk'], cfg2);
+    const userMsg: string = lastBody.messages[0].content;
+    expect(userMsg).not.toContain('Japanese');
+    expect(userMsg).not.toContain('Korean');
+    expect(userMsg).not.toContain('見習い');
+  });
+});
+
+  test('parses LLM reply with Japanese (kana/kanji) and Korean (hangul) variants', async () => {
+    nextResponseText = '學徒=apprentice,見習い,弟子,수련생,견습';
+    const groups = await translateKeywords(['學徒'], cfg);
+    expect(groups[0]).toContain('apprentice');
+    expect(groups[0]).toContain('見習い');
+    expect(groups[0]).toContain('弟子');
+    expect(groups[0]).toContain('수련생');
+    expect(groups[0]).toContain('견습');
+  });
+});
+
+describe('translateKeywords prompt — multilingual hint', () => {
+  let originalFetch: typeof fetch;
+  let lastBody: any;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    lastBody = null;
+    globalThis.fetch = (async (_url: any, init: any) => {
+      lastBody = JSON.parse(init.body);
+      return new Response(
+        JSON.stringify({ content: [{ type: 'text', text: '' }] }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const cfg2: LLMConfig = { provider: 'anthropic', apiKey: 'sk-test' };
+
+  test('CJK input -> prompt mentions Japanese AND Korean explicitly', async () => {
+    await translateKeywords(['學徒', '科幻'], cfg2);
+    const userMsg: string = lastBody.messages[0].content;
+    expect(userMsg).toContain('Japanese');
+    expect(userMsg).toContain('Korean');
+    expect(userMsg).toContain('見習い');
+    expect(userMsg).toContain('수련생');
+  });
+
+  test('CJK input -> AniList rationale appears in the prompt', async () => {
+    await translateKeywords(['學徒'], cfg2);
+    const userMsg: string = lastBody.messages[0].content;
+    expect(userMsg.toLowerCase()).toContain('anilist');
+  });
+
+  test('pure-ASCII input -> prompt does NOT mention Japanese/Korean (token saving)', async () => {
+    await translateKeywords(['steampunk'], cfg2);
+    const userMsg: string = lastBody.messages[0].content;
+    expect(userMsg).not.toContain('Japanese');
+    expect(userMsg).not.toContain('Korean');
+    expect(userMsg).not.toContain('見習い');
+  });
+});

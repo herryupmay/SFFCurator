@@ -1,0 +1,12 @@
+node_modules/
+dist/
+output/
+.env
+.env.local
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+bun.lockb
+webpages/

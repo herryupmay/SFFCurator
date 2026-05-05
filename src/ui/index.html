@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SFF Curator</title>
+<style>
+  :root {
+    --bg: #fafaf7;
+    --fg: #1a1a1a;
+    --muted: #6b6b6b;
+    --accent: #2c5f8e;
+    --accent-hover: #1e4666;
+    --border: #d8d6d0;
+    --card-bg: #ffffff;
+    --warning-bg: #fff4d6;
+    --warning-border: #e8c969;
+    --error: #a83232;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans TC",
+                 "PingFang TC", "Microsoft JhengHei", sans-serif;
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem 4rem;
+    background: var(--bg);
+    color: var(--fg);
+    line-height: 1.55;
+  }
+  header { display: flex; justify-content: space-between; align-items: baseline;
+    border-bottom: 1px solid var(--border); padding-bottom: 1rem; margin-bottom: 1.5rem; }
+  h1 { font-size: 1.5rem; font-weight: 600; margin: 0; letter-spacing: 0.01em; }
+  nav { display: flex; gap: 1rem; align-items: center; }
+  nav a, nav button.linklike { color: var(--muted); text-decoration: none;
+    font-size: 0.9rem; background: none; border: none; cursor: pointer;
+    font-family: inherit; padding: 0; }
+  nav a:hover, nav button.linklike:hover { color: var(--accent); }
+  .panel { background: var(--card-bg); border: 1px solid var(--border);
+    border-radius: 4px; padding: 1.25rem; margin-bottom: 1.5rem; }
+  .panel h2 { margin: 0 0 1rem; font-size: 1.1rem; font-weight: 600; }
+  label { display: block; font-size: 0.9rem; color: var(--muted); margin-bottom: 0.4rem; }
+  input[type=text], input[type=password], select { width: 100%; padding: 0.55rem 0.7rem;
+    font-size: 1rem; font-family: inherit; border: 1px solid var(--border);
+    border-radius: 3px; background: #fff; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  .row { display: flex; gap: 0.75rem; align-items: stretch; }
+  .row > input { flex: 1; }
+  button { padding: 0.55rem 1.4rem; font-size: 1rem; font-family: inherit;
+    background: var(--accent); color: white; border: none; border-radius: 3px;
+    cursor: pointer; transition: background 0.15s; }
+  button:hover { background: var(--accent-hover); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--border); }
+  button.secondary:hover { background: #f0eee8; }
+  #status { font-size: 0.9rem; color: var(--muted); margin: 0.75rem 0; min-height: 1.4em; }
+  #status.error { color: var(--error); }
+  .work { background: var(--card-bg); border: 1px solid var(--border);
+    border-left: 3px solid var(--accent); border-radius: 3px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
+  .work h3 { margin: 0 0 0.4rem; font-size: 1.1rem; font-weight: 600; }
+  .work .meta { font-size: 0.9rem; color: var(--muted); margin-bottom: 0.5rem; }
+  .work .sources { font-size: 0.85rem; margin-top: 0.5rem; }
+  .work .sources a { color: var(--accent); text-decoration: none; margin-right: 0.75rem; }
+  .work .sources a:hover { text-decoration: underline; }
+  .tag { display: inline-block; background: #efece4; color: var(--muted);
+    font-size: 0.75rem; padding: 0.1rem 0.5rem; border-radius: 10px; margin-right: 0.3rem; }
+  .settings { display: none; }
+  .settings.open { display: block; }
+  .settings .field { margin-bottom: 1.1rem; }
+  .settings .help { font-size: 0.8rem; color: var(--muted); margin-top: 0.3rem; }
+  .settings .help a { color: var(--accent); }
+  .settings .help code { background: #f4f1ea; padding: 0.05rem 0.25rem;
+    border-radius: 2px; font-size: 0.85em; }
+  details summary { cursor: pointer; font-size: 0.85rem; color: var(--muted); }
+  details pre { background: #f4f1ea; padding: 0.75rem; overflow-x: auto;
+    font-size: 0.8rem; border-radius: 3px; white-space: pre-wrap; word-break: break-word; }
+  .welcome { background: var(--card-bg); border: 1px dashed var(--border);
+    border-radius: 4px; padding: 1.5rem; text-align: center; color: var(--muted); }
+  .welcome strong { color: var(--fg); }
+  footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border);
+    font-size: 0.8rem; color: var(--muted); text-align: center; }
+
+  /* writeup + flag styles */
+  .work .alt { color: var(--muted); font-weight: 400; font-size: 0.9rem; }
+  .work .conf { float: right; color: #c19a3e; font-size: 0.95rem; letter-spacing: 1px; }
+  .work .tags { margin: 0.4rem 0 0.5rem; display: flex; flex-wrap: wrap; gap: 0.3rem; }
+  .tag.flag { background: #fff4d6; color: #6b5310; border: 1px solid #e8c969; }
+  .writeup-row { margin-top: 0.75rem; }
+  button.secondary.tiny { padding: 0.25rem 0.7rem; font-size: 0.8rem; }
+  button.writeup-btn { padding: 0.4rem 1rem; font-size: 0.88rem; }
+  .writeup-output { margin-top: 0.75rem; }
+  .writeup-output:empty { display: none; }
+  .writeup-text {
+    background: #f8f6f0;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0.85rem 1rem;
+    line-height: 1.7;
+    font-size: 0.95rem;
+  }
+  .writeup-text p { margin: 0 0 0.6rem; }
+  .writeup-text p:last-child { margin-bottom: 0; }
+  .writeup-meta {
+    margin-top: 0.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  .writeup-meta button { margin-left: auto; }
+  .writeup-flagged { color: #8a6210; }
+  .writeup-warning {
+    background: var(--warning-bg);
+    border: 1px solid var(--warning-border);
+    color: #6b5310;
+    padding: 0.6rem 0.85rem;
+    border-radius: 3px;
+    font-size: 0.9rem;
+  }
+  .writeup-loading {
+    color: var(--muted);
+    font-size: 0.9rem;
+    padding: 0.5rem 0;
+  }
+  mark.bad-phrase {
+    background: #fff4d6;
+    border-bottom: 1px dashed #c19a3e;
+    padding: 0 1px;
+    border-radius: 2px;
+  }
+
+  .action-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .action-bar button { padding: 0.45rem 1.1rem; font-size: 0.88rem; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1 data-i18n="title">SFF Curator</h1>
+  <nav>
+    <button class="linklike" id="lang-toggle" title="切換語言 / Switch language">中文</button>
+    <a href="#" id="settings-link" data-i18n="nav.settings">⚙ Settings</a>
+  </nav>
+</header>
+
+<section class="panel settings" id="settings-panel">
+  <h2 data-i18n="settings.heading">Settings</h2>
+
+  <div class="field">
+    <label data-i18n="settings.provider.label">LLM provider</label>
+    <select id="llm-provider">
+      <option value="anthropic" data-i18n="settings.provider.anthropic">Anthropic Claude (recommended)</option>
+      <option value="openai" data-i18n="settings.provider.openai">OpenAI / OpenAI-compatible (local llama.cpp, LM Studio, vLLM…)</option>
+      <option value="google" data-i18n="settings.provider.google">Google Gemini</option>
+      <option value="ollama" data-i18n="settings.provider.ollama">Ollama (local model)</option>
+    </select>
+    <div class="help" data-i18n="settings.provider.help">
+      Non-Claude models tend to leak mainland-Chinese phrasing. Watch for the yellow flags on writeups.
+    </div>
+  </div>
+
+  <div class="field">
+    <label data-i18n="settings.model.label">Model name</label>
+    <input type="text" id="llm-model" placeholder="claude-sonnet-4-5">
+    <div class="help" data-i18n="settings.model.help">
+      Leave blank to use the provider default. Examples: claude-sonnet-4-5, gpt-4o, gemini-1.5-pro, llama3.
+    </div>
+  </div>
+
+  <div class="field">
+    <label data-i18n="settings.baseUrl.label">Base URL (optional — for local / self-hosted LLMs)</label>
+    <input type="text" id="llm-base-url" placeholder="http://localhost:8000/v1">
+    <div class="help" data-i18n="settings.baseUrl.help">
+      Only used with the OpenAI provider. Point this at your local server to use llama-cpp-python, LM Studio, vLLM, or any OpenAI-compatible endpoint. Leave blank for the real OpenAI API.
+      For llama-cpp-python: <code>python -m llama_cpp.server --model path/to/model.gguf</code> then enter <code>http://localhost:8000/v1</code>.
+    </div>
+  </div>
+
+  <div class="field">
+    <label data-i18n="settings.llmKey.label">LLM API key</label>
+    <input type="password" id="llm-key" placeholder="sk-ant-... / sk-... / etc.">
+    <div class="help" data-i18n="settings.llmKey.help">
+      Stored only in your browser. Sent directly to the LLM provider when generating writeups, never to anyone else. For local LLM servers a placeholder like <code>local</code> usually works.
+    </div>
+  </div>
+
+  <div class="field">
+    <label data-i18n="settings.tmdbKey.label">TMDB key (optional — for film &amp; TV)</label>
+    <input type="password" id="tmdb-key" placeholder="leave blank to skip film/TV">
+    <div class="help" data-i18n="settings.tmdbKey.help">
+      Free, sign up at <a href="https://www.themoviedb.org/settings/api" target="_blank">themoviedb.org/settings/api</a>.
+      Without it, books / anime / manga still work — you just won't get film or TV hits.
+    </div>
+  </div>
+
+  <div class="field">
+    <label data-i18n="settings.excludeAuthors.label">Exclude authors (one per line)</label>
+    <textarea id="exclude-authors" rows="4"
+      style="width:100%;padding:0.55rem 0.7rem;font-size:0.95rem;font-family:inherit;border:1px solid var(--border);border-radius:3px;background:#fff;resize:vertical;"
+      placeholder="Neil Gaiman&#10;Brandon Sanderson"></textarea>
+    <div class="help" data-i18n="settings.excludeAuthors.help">
+      Drop any work whose creator matches one of these names. Case-insensitive,
+      matches across English / Chinese / original-language fields. Useful for
+      authors you've already curated to death or want to avoid for a specific
+      forum theme.
+    </div>
+  </div>
+
+  <button id="settings-save" data-i18n="settings.save">Save</button>
+  <button class="secondary" id="settings-close" data-i18n="settings.close" style="margin-left:.5rem;">Close</button>
+</section>
+
+<section class="panel">
+  <label for="theme" data-i18n="search.label">Theme</label>
+  <form id="search-form" class="row">
+    <input type="text" id="theme"
+      data-i18n-attr="placeholder:search.placeholder"
+      placeholder="e.g. steampunk · cyberpunk · cosmic horror · 蒸汽龐克"
+      autofocus required>
+    <button type="submit" id="search-btn" data-i18n="search.button">Search</button>
+  </form>
+  <div id="status"></div>
+</section>
+
+<section id="results">
+  <div class="welcome" id="welcome">
+    <p data-i18n="welcome.line1"><strong>Type a theme above</strong> to find candidate works.</p>
+    <p data-i18n="welcome.line2">
+      Search works without any keys. Add an LLM key in
+      <a href="#" id="welcome-settings-link">Settings</a> to enable the zh-TW writeup step.
+    </p>
+  </div>
+</section>
+
+<footer data-i18n="footer">
+  Runs locally on your PC. Nothing is uploaded to any server.
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
