@@ -2,7 +2,10 @@
  * Tests for src/core/writeup.ts:
  *   - bad-phrases post-check correctly flags 大陸用語
  *   - char-count counts CJK characters and ignores ASCII / punctuation
- *   - the system prompt locks zh-TW + 200字 + no-fabrication invariants
+ *   - the system prompt locks zh-TW + ~500 字 four-section structure +
+ *     no-fabrication invariants
+ *   - reception material (Reddit / Plurk) is forwarded into the user
+ *     payload but kept separate from the work's synopsis
  *
  * The LLM call itself is replaced via global fetch monkey-patch.
  */
@@ -117,14 +120,35 @@ describe('writeup - char count', () => {
 });
 
 describe('writeup - request shape', () => {
-  test('forwards system prompt with 台灣繁體 lock + bad-phrase mapping', async () => {
+  test('forwards system prompt with 台灣繁體 lock + bad-phrase mapping + new 500-字 four-section structure', async () => {
     providerShape = 'anthropic';
     nextResponseText = '乾淨。';
     await writeup(baseWork, { provider: 'anthropic', apiKey: 'k' });
     const body = JSON.parse((lastReq!.init!.body as string));
     expect(body.system).toContain('台灣繁體中文');
     expect(body.system).toContain('視頻→影片');
-    expect(body.system).toContain('200 字 ±20');
+    // New length target: ~500 字 instead of 200.
+    expect(body.system).toContain('500 字 ±50');
+    // Four-section structure: §1 background, §2-§3 story (longest), §4 reception.
+    expect(body.system).toContain('第一段');
+    expect(body.system).toContain('第二、三段');
+    expect(body.system).toContain('第四段');
+    // Explicit instruction to ground §4 in the reception data.
+    expect(body.system).toContain('reception');
+
+    // Rule 5 covers BOTH transliteration AND semantic translation of
+    // proper nouns — series titles included. The concrete examples
+    // (Tawny Man Trilogy, Fitz and the Fool, FitzChivalry, Buckkeep)
+    // are what stops the model from guessing translations like
+    // "棕色男人三部曲" / "費茲與愚人三部曲" / "費滋駿騎" / "公鹿堡".
+    expect(body.system).toContain('音譯');
+    expect(body.system).toContain('意譯');
+    expect(body.system).toContain('Tawny Man');
+    expect(body.system).toContain('Fitz and the Fool');
+    expect(body.system).toContain('Buckkeep');
+    // Worked example showing the correct (English-preserved) form is
+    // present, demonstrating the desired output to the model.
+    expect(body.system).toContain('FitzChivalry');
   });
 
   test('embeds the work payload as JSON in the user message', async () => {
@@ -137,5 +161,56 @@ describe('writeup - request shape', () => {
     expect(userText).toContain('神經喚術士');
     expect(userText).toContain('cyberpunk');
     expect(userText).toContain('"year": 1984');
+    // Reception block is always present in the payload (empty arrays when
+    // no reception material was supplied), so the LLM sees the schema.
+    expect(userText).toContain('"reception"');
+  });
+
+  test('forwards reception material (Reddit + Plurk) into the user payload', async () => {
+    providerShape = 'anthropic';
+    nextResponseText = '乾淨。';
+    await writeup(
+      baseWork,
+      { provider: 'anthropic', apiKey: 'k' },
+      {
+        reddit: [{
+          lang: 'en',
+          title: 'r/printSF take',
+          text: 'A long-form reader take that frames the book as the prototype of the cyberpunk genre. '.repeat(3),
+          url: 'https://reddit.com/x',
+          subreddit: 'printSF',
+          score: 420,
+          numComments: 30,
+        }],
+        plurk: [{
+          lang: 'zh',
+          title: '神經喚術士心得',
+          text: '節奏緩慢但後勁強,讀完才反應過來剛剛看的是什麼。',
+          url: 'https://www.plurk.com/p/abc',
+          pid: 'abc',
+          respCount: 12,
+        }],
+      },
+    );
+    const body = JSON.parse((lastReq!.init!.body as string));
+    const userText = body.messages[0].content;
+    // Reddit excerpt + subreddit name make it through.
+    expect(userText).toContain('printSF');
+    expect(userText).toContain('prototype of the cyberpunk genre');
+    // Plurk excerpt makes it through.
+    expect(userText).toContain('節奏緩慢但後勁強');
+  });
+
+  test('omitted reception arg defaults to empty arrays in the payload', async () => {
+    providerShape = 'anthropic';
+    nextResponseText = '乾淨。';
+    await writeup(baseWork, { provider: 'anthropic', apiKey: 'k' });
+    const body = JSON.parse((lastReq!.init!.body as string));
+    const userText = body.messages[0].content;
+    // Even with no reception arg, the payload includes the field with
+    // empty arrays so the LLM has a stable schema to read.
+    expect(userText).toContain('"reception"');
+    expect(userText).toMatch(/"reddit":\s*\[\]/);
+    expect(userText).toMatch(/"plurk":\s*\[\]/);
   });
 });

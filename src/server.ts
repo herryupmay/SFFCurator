@@ -724,15 +724,26 @@ async function handleWriteup(req: Request): Promise<Response> {
   };
 
   try {
-    // Enrich the work's synopsis from Wikipedia + Reddit before calling the
-    // LLM, so the writeup is grounded in real plot/reception material rather
-    // than thin adapter metadata. Failures are non-fatal - if Wikipedia is
-    // down we still get a writeup from the original synopsis.
-    const { work: enriched, report } = await enrichWork(body.work).catch(err => {
+    // Enrich the work's synopsis (Wikipedia: en/zh/ja/ko) and gather
+    // reception material (Reddit + Plurk) before calling the LLM. The two
+    // are deliberately kept separate: synopsis grounds §1-§3 (background +
+    // story), reception grounds §4 (reader reactions). Failures are
+    // non-fatal — if Wikipedia is down we still get a writeup from the
+    // original synopsis, just without the cross-language enrichment.
+    // Pass the LLM config into enrichWork so its title-resolver step can
+    // run (Step 0 of the pipeline — turns "刺客正傳1刺客學徒(經典紀念版)"
+    // into "Assassin's Apprentice" so Reddit and en Wikipedia get a
+    // useful query). If config is unavailable the resolver is skipped and
+    // the rest of the pipeline degrades gracefully.
+    const { work: enriched, reception, report } = await enrichWork(body.work, config).catch(err => {
       console.warn('[writeup] enrichment failed, falling back to bare metadata:', err);
-      return { work: body.work as Work, report: { wikipedia: [], reddit: [], plurk: [] } };
+      return {
+        work: body.work as Work,
+        reception: { reddit: [], plurk: [] },
+        report: { wikipedia: [], reddit: [], plurk: [] },
+      };
     });
-    const result = await writeup(enriched, config);
+    const result = await writeup(enriched, config, reception);
     return Response.json({
       ...result,
       enrichment: {
@@ -816,8 +827,5 @@ function openBrowser(url: string): void {
     Bun.spawn(['cmd', '/c', 'start', '', url], { stdio: ['ignore', 'ignore', 'ignore'] });
   } catch {
     console.warn('[browser] could not auto-open, please open manually:', url);
-  }
-}
-open manually:', url);
   }
 }
